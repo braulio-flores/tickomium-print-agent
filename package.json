@@ -1,0 +1,56 @@
+{
+  "name": "tickomium-print-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local print agent for Tickomium thermal printer support",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsc && cp -r src/renderer dist/renderer && electron .",
+    "dev:server": "ts-node src/server.ts",
+    "build": "tsc && cp -r src/renderer dist/renderer",
+    "start": "electron .",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist": "npm run build && electron-builder --mac --win"
+  },
+  "build": {
+    "appId": "com.tickomium.print-agent",
+    "productName": "Tickomium Print Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "icon": "assets/icon.png",
+      "identity": null
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    }
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "electron-store": "^8.2.0",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}

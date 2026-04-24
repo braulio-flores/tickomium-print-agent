@@ -27,11 +27,13 @@
       "target": "dmg",
       "category": "public.app-category.utilities",
       "icon": "assets/icon.png",
-      "identity": null
+      "identity": null,
+      "artifactName": "Tickomium-Print-Agent.dmg"
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "artifactName": "Tickomium-Print-Agent-Setup.exe"
     },
     "nsis": {
       "oneClick": true,

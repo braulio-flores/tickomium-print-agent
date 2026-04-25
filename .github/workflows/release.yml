@@ -22,7 +22,7 @@ jobs:
         run: npm install
 
       - name: Build & package (macOS)
-        run: npm run build && electron-builder --mac --publish never
+        run: npm run build && npx electron-builder --mac --publish never
 
       - name: Upload macOS artifact
         uses: softprops/action-gh-release@v2
@@ -44,7 +44,7 @@ jobs:
         run: npm install
 
       - name: Build & package (Windows)
-        run: npm run build && electron-builder --win --publish never
+        run: npm run build && npx electron-builder --win --publish never
 
       - name: Upload Windows artifact
         uses: softprops/action-gh-release@v2

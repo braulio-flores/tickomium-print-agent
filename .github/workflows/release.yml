@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Ensure installer script is executable
+        run: chmod +x assets/Instalar.command
+
       - name: Build & package (macOS)
         run: npm run build && npx electron-builder --mac --publish never
 

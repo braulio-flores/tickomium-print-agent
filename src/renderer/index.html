@@ -178,18 +178,33 @@
     async function checkHealth() {
       try {
         const health = await api.getHealth();
-        if (health.status === "ok" && health.printer) {
-          statusBar.className = "status-bar ok";
-          statusDot.className = "dot green";
-          statusText.textContent = `Conectado — ${health.printer} (${health.printerStatus})`;
-        } else if (health.status === "ok" && !health.printer) {
+
+        if (health.status !== "ok") {
+          statusBar.className = "status-bar error";
+          statusDot.className = "dot red";
+          statusText.textContent = "Servidor no disponible";
+          return;
+        }
+
+        if (!health.printer) {
           statusBar.className = "status-bar loading";
           statusDot.className = "dot gray";
           statusText.textContent = "Servidor activo — Selecciona una impresora";
+          return;
+        }
+
+        if (health.printerStatus === "enabled") {
+          statusBar.className = "status-bar ok";
+          statusDot.className = "dot green";
+          statusText.textContent = `Conectado — ${health.printer}`;
+        } else if (health.printerStatus === "disabled") {
+          statusBar.className = "status-bar error";
+          statusDot.className = "dot red";
+          statusText.textContent = `${health.printer} — Deshabilitada`;
         } else {
           statusBar.className = "status-bar error";
           statusDot.className = "dot red";
-          statusText.textContent = "Error de conexión";
+          statusText.textContent = `${health.printer} — No encontrada (¿desconectada?)`;
         }
       } catch {
         statusBar.className = "status-bar error";

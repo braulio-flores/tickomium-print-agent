@@ -1,6 +1,18 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog, MenuItemConstructorOptions } from "electron";
 import * as path from "path";
-import { startServer, stopServer, setPrinter, PRINT_AGENT_PORT } from "./server";
+import { startServer, stopServer, setPrinter, setVersionInfo, PRINT_AGENT_PORT } from "./server";
+import {
+  checkForUpdate,
+  downloadAndInstall,
+  getUpdateState,
+  latestKnownVersion,
+  onUpdateState,
+} from "./updater";
+
+// Se revisa al arrancar (con margen para no competir con el inicio de la
+// computadora) y luego cada 6 horas. Nunca se instala solo.
+const FIRST_UPDATE_CHECK_MS = 30_000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 // electron-store is ESM-only in v8+, use dynamic import
 let store: any;
@@ -43,10 +55,26 @@ function createTray() {
   });
 }
 
+function updateMenuItem(): MenuItemConstructorOptions {
+  const update = getUpdateState();
+  switch (update.status) {
+    case "available":
+      return { label: `Actualizar a la versión ${update.update.version}…`, click: () => confirmAndUpdate() };
+    case "downloading":
+      return { label: `Descargando actualización… ${update.progress}%`, enabled: false };
+    case "installing":
+      return { label: "Instalando actualización…", enabled: false };
+    case "checking":
+      return { label: "Buscando actualizaciones…", enabled: false };
+    default:
+      return { label: "Buscar actualizaciones", click: () => manualUpdateCheck() };
+  }
+}
+
 function updateTrayMenu() {
   const printer = store?.get("printer") || "(sin configurar)";
   const contextMenu = Menu.buildFromTemplate([
-    { label: "Tickomium Print Agent", enabled: false },
+    { label: `Tickomium Print Agent v${app.getVersion()}`, enabled: false },
     { type: "separator" },
     { label: `Impresora: ${printer}`, enabled: false },
     { type: "separator" },
@@ -54,6 +82,7 @@ function updateTrayMenu() {
       label: "Configurar",
       click: () => showConfigWindow(),
     },
+    updateMenuItem(),
     {
       label: "Abrir al encender la computadora",
       type: "checkbox",
@@ -83,7 +112,7 @@ function showConfigWindow() {
 
   configWindow = new BrowserWindow({
     width: 420,
-    height: 460,
+    height: 540,
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -109,8 +138,91 @@ function showConfigWindow() {
   });
 }
 
+// ───────────────────────────── actualizaciones ─────────────────────────────
+
+let updateInProgress = false;
+
+async function confirmAndUpdate() {
+  const update = getUpdateState();
+  if (update.status !== "available" || updateInProgress) return;
+  const { version } = update.update;
+
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    title: "Actualizar la app de impresión",
+    message: `¿Instalar la versión ${version}?`,
+    detail:
+      "La app se cerrará y se volverá a abrir sola en unos segundos. Mientras tanto no saldrán tickets.\n\n" +
+      "Tu impresora elegida se conserva. Si algo falla, se queda la versión que tienes ahora.",
+    buttons: ["Actualizar ahora", "Más tarde"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return;
+
+  updateInProgress = true;
+  try {
+    const outcome = await downloadAndInstall(update.update);
+    if (outcome === "restarting") {
+      app.quit();
+      return;
+    }
+    await dialog.showMessageBox({
+      type: "info",
+      title: "Actualizar la app de impresión",
+      message: "Termina la actualización a mano",
+      detail:
+        "Se abrió el instalador de la versión nueva. Cierra esta app (ícono junto al reloj → Salir), " +
+        "arrastra la app nueva a Aplicaciones y elige «Reemplazar». Si al abrirla sale un aviso de Apple, " +
+        "permítela en Configuración del Sistema → Privacidad y seguridad → «Abrir igualmente».\n\n" +
+        "Tu impresora elegida se conserva.",
+    });
+  } catch (err: any) {
+    console.error("No se pudo actualizar:", err);
+    dialog.showErrorBox(
+      "No se pudo actualizar",
+      "La app de impresión sigue funcionando con la versión que tienes. Revisa tu conexión a internet e intenta más tarde."
+    );
+  } finally {
+    updateInProgress = false;
+  }
+}
+
+async function manualUpdateCheck() {
+  const result = await checkForUpdate();
+  if (result.status === "available") {
+    await confirmAndUpdate();
+  } else if (result.status === "up_to_date") {
+    await dialog.showMessageBox({
+      type: "info",
+      title: "Tickomium Print Agent",
+      message: "Ya tienes la versión más reciente",
+      detail: `Versión ${app.getVersion()}`,
+    });
+  } else if (result.status === "error") {
+    dialog.showErrorBox(
+      "No se pudo revisar",
+      "No se pudo revisar si hay una versión nueva. Revisa tu conexión a internet e intenta más tarde."
+    );
+  }
+}
+
+function setupUpdates() {
+  onUpdateState((update) => {
+    setVersionInfo({ latestVersion: latestKnownVersion() });
+    updateTrayMenu();
+    configWindow?.webContents.send("update-state", update);
+  });
+  setTimeout(() => checkForUpdate(), FIRST_UPDATE_CHECK_MS);
+  setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL_MS);
+}
+
 // IPC handlers
 function setupIPC() {
+  ipcMain.handle("get-update-state", () => getUpdateState());
+  ipcMain.handle("start-update", () => confirmAndUpdate());
+  ipcMain.handle("check-updates", () => manualUpdateCheck());
+
   ipcMain.handle("get-config", () => {
     return {
       printer: store?.get("printer") || "",
@@ -181,6 +293,7 @@ app.on("ready", async () => {
   applyOpenAtLogin(store.get("openAtLogin") !== false);
 
   const printer = store.get("printer") || "";
+  setVersionInfo({ version: app.getVersion() });
 
   try {
     await startServer(printer);
@@ -198,6 +311,7 @@ app.on("ready", async () => {
     return;
   }
   createTray();
+  setupUpdates();
 
   // Don't show window on startup — tray only
   app.dock?.hide?.(); // macOS: hide dock icon

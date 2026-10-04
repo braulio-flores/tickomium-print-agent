@@ -18,6 +18,17 @@ let currentPort = PRINT_AGENT_PORT;
 let currentPrinter = "";
 let server: Server | null = null;
 
+// Versión instalada y la última publicada (la llena el actualizador). Tickomium
+// las lee de /health para avisar cuando la app está desactualizada.
+let versionInfo: { version: string | null; latestVersion: string | null } = {
+  version: process.env.npm_package_version ?? null,
+  latestVersion: null,
+};
+
+export function setVersionInfo(info: Partial<typeof versionInfo>) {
+  versionInfo = { ...versionInfo, ...info };
+}
+
 // Solo Tickomium puede usar la impresora. Sin esto, cualquier página que abra
 // el cajero podría mandar impresiones o leer la lista de impresoras.
 // - https://www.tickomium.com (producción; tickomium.com redirige ahí) y
@@ -108,7 +119,14 @@ async function printRaw(printerName: string, filePath: string): Promise<void> {
 // GET /health
 app.get("/health", async (_req, res) => {
   const printerStatus = await getPrinterStatus(currentPrinter);
-  res.json({ status: "ok", printer: currentPrinter || null, printerStatus, port: currentPort });
+  res.json({
+    status: "ok",
+    printer: currentPrinter || null,
+    printerStatus,
+    port: currentPort,
+    version: versionInfo.version,
+    latestVersion: versionInfo.latestVersion,
+  });
 });
 
 // GET /printers

@@ -109,11 +109,41 @@
       font-size: 11px;
       color: #9ca3af;
     }
+    .link-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 11px;
+      font-weight: 500;
+      color: #2563eb;
+      cursor: pointer;
+      flex: none;
+    }
+    .link-btn:disabled { color: #9ca3af; cursor: default; }
+    .update-banner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      background: #eff6ff;
+      color: #1e40af;
+      font-size: 13px;
+    }
+    .update-banner[hidden] { display: none; }
+    .update-banner span { flex: 1; }
+    .update-banner button { flex: none; padding: 8px 12px; }
   </style>
 </head>
 <body>
   <h1>🖨️ Tickomium Print Agent</h1>
   <p class="subtitle">Configura tu impresora térmica</p>
+
+  <div id="updateBanner" class="update-banner" hidden>
+    <span id="updateText"></span>
+    <button class="btn-primary" id="updateBtn">Actualizar</button>
+  </div>
 
   <div id="statusBar" class="status-bar loading">
     <span class="dot gray" id="statusDot"></span>
@@ -132,7 +162,11 @@
 
   <div id="msg" class="msg"></div>
 
-  <p class="footer"><span id="versionText">Tickomium Print Agent</span> — Esta ventana se puede cerrar, la app sigue en la barra de tareas</p>
+  <p class="footer">
+    <span id="versionText">Tickomium Print Agent</span> ·
+    <button class="link-btn" id="checkUpdatesBtn">Buscar actualizaciones</button><br>
+    Esta ventana se puede cerrar, la app sigue funcionando junto al reloj
+  </p>
 
   <script>
     const api = window.electronAPI || window.api;
@@ -233,6 +267,37 @@
         showMsg(result.message || "Error al imprimir", "error");
       }
     });
+
+    // Actualizaciones: solo se instalan cuando el usuario presiona Actualizar.
+    const updateBanner = document.getElementById("updateBanner");
+    const updateText = document.getElementById("updateText");
+    const updateBtn = document.getElementById("updateBtn");
+    const checkUpdatesBtn = document.getElementById("checkUpdatesBtn");
+
+    function renderUpdate(state) {
+      checkUpdatesBtn.disabled = state.status !== "idle" && state.status !== "up_to_date";
+      checkUpdatesBtn.textContent = state.status === "checking" ? "Buscando…" : "Buscar actualizaciones";
+      if (state.status === "available") {
+        updateText.textContent = `Hay una versión nueva (${state.update.version}).`;
+        updateBtn.disabled = false;
+        updateBtn.textContent = "Actualizar";
+      } else if (state.status === "downloading") {
+        updateText.textContent = `Descargando versión ${state.update.version}… ${state.progress}%`;
+        updateBtn.disabled = true;
+      } else if (state.status === "installing") {
+        updateText.textContent = "Instalando. La app se cerrará y se volverá a abrir sola.";
+        updateBtn.disabled = true;
+      } else {
+        updateBanner.hidden = true;
+        return;
+      }
+      updateBanner.hidden = false;
+    }
+
+    updateBtn.addEventListener("click", () => api.startUpdate());
+    checkUpdatesBtn.addEventListener("click", () => api.checkUpdates());
+    api.onUpdateState(renderUpdate);
+    api.getUpdateState().then(renderUpdate);
 
     loadConfig();
     setInterval(checkHealth, 30000);

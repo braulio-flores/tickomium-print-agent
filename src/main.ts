@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog } from "electron";
 import * as path from "path";
-import { startServer, stopServer, setPrinter, setPort } from "./server";
+import { startServer, stopServer, setPrinter, PRINT_AGENT_PORT } from "./server";
 
 // electron-store is ESM-only in v8+, use dynamic import
 let store: any;
@@ -13,9 +13,20 @@ async function initStore() {
   store = new Store({
     defaults: {
       printer: "",
-      port: 6441,
+      openAtLogin: true,
     },
   });
+  // Versiones anteriores dejaban elegir el puerto; Tickomium siempre busca la
+  // app en PRINT_AGENT_PORT, así que se descarta cualquier puerto guardado.
+  store.delete("port");
+}
+
+// Arrancar con la sesión del sistema: si la app no está abierta, el navegador
+// no puede imprimir y el ticket no sale. Solo en la app instalada; en
+// desarrollo registraría el binario de Electron.
+function applyOpenAtLogin(enabled: boolean) {
+  if (!app.isPackaged) return;
+  app.setLoginItemSettings({ openAtLogin: enabled });
 }
 
 function createTray() {
@@ -42,6 +53,15 @@ function updateTrayMenu() {
     {
       label: "Configurar",
       click: () => showConfigWindow(),
+    },
+    {
+      label: "Abrir al encender la computadora",
+      type: "checkbox",
+      checked: store?.get("openAtLogin") !== false,
+      click: (item) => {
+        store?.set("openAtLogin", item.checked);
+        applyOpenAtLogin(item.checked);
+      },
     },
     { type: "separator" },
     {
@@ -94,22 +114,20 @@ function setupIPC() {
   ipcMain.handle("get-config", () => {
     return {
       printer: store?.get("printer") || "",
-      port: store?.get("port") || 6441,
+      version: app.getVersion(),
     };
   });
 
-  ipcMain.handle("save-config", async (_event, config: { printer: string; port: number }) => {
+  ipcMain.handle("save-config", async (_event, config: { printer: string }) => {
     store?.set("printer", config.printer);
-    store?.set("port", config.port);
     setPrinter(config.printer);
-    setPort(config.port);
     updateTrayMenu();
     return { success: true };
   });
 
   ipcMain.handle("get-printers", async () => {
     try {
-      const res = await fetch(`http://127.0.0.1:${store?.get("port") || 6441}/printers`);
+      const res = await fetch(`http://127.0.0.1:${PRINT_AGENT_PORT}/printers`);
       const data = (await res.json()) as { printers?: string[] };
       return data.printers || [];
     } catch {
@@ -119,7 +137,7 @@ function setupIPC() {
 
   ipcMain.handle("get-health", async () => {
     try {
-      const res = await fetch(`http://127.0.0.1:${store?.get("port") || 6441}/health`);
+      const res = await fetch(`http://127.0.0.1:${PRINT_AGENT_PORT}/health`);
       return await res.json();
     } catch {
       return { status: "error", printer: null, printerStatus: "not_found" };
@@ -131,7 +149,7 @@ function setupIPC() {
       // Send a simple test text as raw bytes
       const testText = "\n\n    *** Tickomium Print Agent ***\n    Prueba de impresion exitosa!\n\n\n\n";
       const buffer = Buffer.from(testText, "utf-8");
-      const res = await fetch(`http://127.0.0.1:${store?.get("port") || 6441}/print`, {
+      const res = await fetch(`http://127.0.0.1:${PRINT_AGENT_PORT}/print`, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: buffer,
@@ -143,15 +161,42 @@ function setupIPC() {
   });
 }
 
+// Una sola instancia: con el arranque automático es fácil que el usuario la
+// abra otra vez sin saber que ya corre; la segunda chocaría por el puerto.
+// En lugar de eso se muestra la ventana de la que ya está abierta.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+}
+
+app.on("second-instance", () => {
+  showConfigWindow();
+});
+
 // App lifecycle
 app.on("ready", async () => {
+  if (!isPrimaryInstance) return;
   await initStore();
   setupIPC();
+  applyOpenAtLogin(store.get("openAtLogin") !== false);
 
-  const port = store.get("port") || 6441;
   const printer = store.get("printer") || "";
 
-  await startServer(port, printer);
+  try {
+    await startServer(printer);
+  } catch (err: any) {
+    // Con instancia única, quien ocupa el puerto es otro programa (o una
+    // versión vieja de esta app que sigue abierta).
+    dialog.showErrorBox(
+      "Tickomium Print Agent",
+      err?.code === "EADDRINUSE"
+        ? `No se pudo iniciar porque otro programa está usando el puerto ${PRINT_AGENT_PORT}.\n\n` +
+            "Cierra cualquier otra copia de Tickomium Print Agent o reinicia la computadora y vuelve a abrir la app."
+        : `No se pudo iniciar la app de impresión.\n\n${err?.message ?? ""}`
+    );
+    app.quit();
+    return;
+  }
   createTray();
 
   // Don't show window on startup — tray only

@@ -1,307 +1,50 @@
 # Tickomium Print Agent
 
-Agente local que permite imprimir tickets ESC/POS desde el frontend en producción (Vercel → Railway → impresora local).
+App de escritorio (Electron) que permite a Tickomium, que corre en el navegador, imprimir tickets en la impresora térmica de la computadora. El navegador no puede hablar con impresoras locales; esta app sí.
 
 ## Cómo funciona
 
 ```
-Frontend (Vercel) → Backend (Railway) genera buffer ESC/POS → Frontend lo envía al agente local → Impresora
+Tickomium (navegador) ──► backend genera el ticket ESC/POS
+        │
+        └──► POST http://localhost:6441/print ──► impresora (lp en Mac, PowerShell en Windows)
 ```
 
-Si el agente no está corriendo, el frontend descarga el ticket en PDF automáticamente como fallback.
+- Corre en segundo plano: sin ventana ni ícono en el Dock, solo un ícono junto al reloj. Al hacerle clic se abre la configuración (elegir impresora e imprimir una prueba).
+- Se abre sola al encender la computadora (se puede apagar desde el menú del ícono: "Abrir al encender la computadora").
+- Instancia única: si se abre otra vez estando corriendo, muestra la ventana de la que ya está abierta.
+- Puerto fijo **6441**. No es configurable: Tickomium siempre busca la app ahí. Si otro programa lo ocupa, la app avisa al iniciar.
+- Solo acepta peticiones de `https://www.tickomium.com` (producción; `tickomium.com` redirige ahí), `https://tickomium.com` y `localhost` (desarrollo). Cualquier otro origen recibe 403. Si el frontend se publica en otro dominio, hay que agregarlo en `isAllowedOrigin` (`src/server.ts`) y sacar versión nueva.
 
-## Instalación
-
-```bash
-cd print-agent
-npm install
-```
-
-## Configuración
-
-Crea un archivo `.env` en `print-agent/`:
-
-```env
-PRINTER_NAME=Printer_POS_58_2
-PRINT_AGENT_PORT=6441
-FRONTEND_ORIGIN=https://app.tickomium.com para prod pero si tiene que ser una env
-```
-
-Para ver el nombre de tu impresora:
-```bash
-lpstat -a
-```
-
-## Uso
-
-**Desarrollo:**
-```bash
-npm run dev
-```
-
-**Producción (compilado):**
-```bash
-npm run build
-npm start
-```
+Si la app está cerrada, Tickomium lo detecta (`GET /health`) y le explica al cajero cómo abrirla o instalarla.
 
 ## Endpoints
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/health` | Estado del agente e impresora |
-| GET | `/printers` | Lista impresoras disponibles (lpstat) |
-| POST | `/print` | Recibe buffer ESC/POS crudo y lo manda a la impresora |
+| GET | `/health` | Estado de la app y de la impresora (`printerStatus`: `enabled`, `disabled`, `not_found`, `not_configured`) |
+| GET | `/printers` | Impresoras instaladas en el sistema |
+| GET | `/config` | Impresora elegida |
+| POST | `/print` | Recibe el ticket ESC/POS crudo (`application/octet-stream`) y lo manda a la impresora |
 
-## Auto-inicio en macOS
-
-Crea `~/Library/LaunchAgents/com.tickomium.print-agent.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.tickomium.print-agent</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/node</string>
-    <string>/ruta/al/proyecto/print-agent/dist/index.js</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PRINTER_NAME</key>
-    <string>Printer_POS_58_2</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-```
-
-Cargar el servicio:
-```bash
-launchctl load ~/Library/LaunchAgents/com.tickomium.print-agent.plist
-```
-
-
-# 🖨️ Print Agent con Electron
-
-Aplicación de escritorio ligera que corre en segundo plano, inicia automáticamente con el sistema y permite imprimir tickets desde una app web mediante un endpoint local.
-
----
-
-# 🚀 Objetivo
-
-* Ejecutarse automáticamente al iniciar la computadora
-* Correr en segundo plano (sin ventana visible)
-* Mostrar icono en la barra (tray)
-* Exponer un endpoint local (`localhost`)
-* Recibir peticiones de impresión desde el frontend
-* Imprimir directamente sin intervención del usuario
-
----
-
-# 📦 Tecnologías
-
-* Electron
-* Node.js
-* Express (para endpoint local)
-* Librería de impresión (ej: `node-thermal-printer` o `printer`)
-
----
-
-# 🛠️ Instalación
+## Desarrollo
 
 ```bash
-# Crear proyecto
-mkdir print-agent
-cd print-agent
-
-# Inicializar
-npm init -y
-
-# Instalar dependencias
-npm install electron express
+npm install
+npm run dev          # compila y abre la app de Electron
+npm run dev:server   # solo el servidor, sin Electron
 ```
 
----
+El servidor suelto acepta `PRINTER_NAME` y `PRINT_AGENT_PORT` como variables de entorno (útil para levantar una segunda copia de prueba en otro puerto). La app instalada siempre usa 6441 y la impresora elegida en su ventana.
 
-# 📁 Estructura básica
+Para ver los nombres de impresoras en Mac: `lpstat -a`.
 
-```
-print-agent/
-├── main.js
-├── server.js
-├── package.json
-├── icon.png
-```
+En desarrollo (`app.isPackaged === false`) no se registra el arranque automático, para no dejar el binario de Electron en los ítems de inicio.
 
----
+## Publicar una versión
 
-# ⚙️ Configuración (package.json)
+1. Sube la versión en `package.json` (`npm version x.y.z --no-git-tag-version`).
+2. Haz commit y empuja un tag `vx.y.z`. El workflow `release.yml` compila el `.dmg` (macOS) y el `.exe` (Windows) y los adjunta al release.
+3. Tickomium descarga siempre `releases/latest`, así que el nuevo instalador queda disponible al instante.
 
-```json
-{
-  "name": "print-agent",
-  "main": "main.js",
-  "scripts": {
-    "start": "electron ."
-  }
-}
-```
-
----
-
-# 🧠 main.js (Electron - núcleo)
-
-```js
-const { app, BrowserWindow, Tray } = require('electron');
-const path = require('path');
-
-let tray = null;
-
-app.whenReady().then(() => {
-  // Crear ventana oculta
-  const win = new BrowserWindow({
-    show: false
-  });
-
-  // Crear tray icon
-  tray = new Tray(path.join(__dirname, 'icon.png'));
-  tray.setToolTip('Print Agent activo');
-
-  // Auto start al iniciar sistema
-  app.setLoginItemSettings({
-    openAtLogin: true
-  });
-
-  // Iniciar servidor local
-  require('./server');
-});
-```
-
----
-
-# 🌐 server.js (endpoint local)
-
-```js
-const express = require('express');
-const app = express();
-
-app.use(express.json());
-
-app.post('/print', async (req, res) => {
-  const { content } = req.body;
-
-  console.log("Imprimiendo:", content);
-
-  // Aquí conectas tu lógica de impresión
-  // Ejemplo:
-  // printer.print(content);
-
-  res.json({ ok: true });
-});
-
-app.listen(3001, () => {
-  console.log('Print agent corriendo en http://localhost:3001');
-});
-```
-
----
-
-# 🔌 Uso desde tu frontend (Next.js)
-
-```js
-await fetch('http://localhost:3001/print', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    content: "Ticket de prueba"
-  })
-});
-```
-
----
-
-# ▶️ Ejecutar en desarrollo
-
-```bash
-npm start
-```
-
----
-
-# 📦 Generar ejecutable (producción)
-
-Instala:
-
-```bash
-npm install electron-builder --save-dev
-```
-
-Agrega en `package.json`:
-
-```json
-"build": {
-  "appId": "com.print.agent",
-  "mac": { "target": "dmg" },
-  "win": { "target": "nsis" }
-}
-```
-
-Luego:
-
-```bash
-npx electron-builder
-```
-
-👉 Genera:
-
-* `.dmg` (Mac)
-* `.exe` (Windows)
-
----
-
-# 🧠 Comportamiento final
-
-* Usuario instala una vez
-* App inicia automáticamente con el sistema
-* Corre en segundo plano
-* Escucha en `localhost:3001`
-* Tu web le manda tickets
-* Imprime sin interacción
-
----
-
-# ⚠️ Buenas prácticas
-
-* Validar requests (evitar abuso)
-* Limitar acceso a localhost
-* Manejar errores de impresora
-* Loggear eventos importantes
-
----
-
-# 💡 Mejoras futuras
-
-* Selección de impresora
-* Reintentos automáticos
-* Logs visibles desde tray
-* UI mínima de configuración
-
----
-
-# 🎯 Resumen
-
-Este agente convierte tu app web en un sistema tipo POS profesional:
-
-✔ impresión automática
-✔ sin navegador
-✔ sin intervención del usuario
-✔ multiplataforma
-
----
+La app de Mac no está firmada: el `.dmg` incluye `Instalar.command`, que le quita la cuarentena para que macOS la deje abrir. Por lo mismo, macOS puede pedir aprobar el arranque automático en Configuración del Sistema → General → Ítems de inicio.

@@ -10,15 +10,48 @@ import { Server } from "http";
 const execFileAsync = promisify(execFile);
 const isWin = process.platform === "win32";
 
-let currentPort = 6441;
+// Puerto fijo: Tickomium (web) siempre busca la app aquí. No es configurable
+// porque cambiarlo en un solo lado deja de imprimir sin explicación.
+export const PRINT_AGENT_PORT = 6441;
+
+let currentPort = PRINT_AGENT_PORT;
 let currentPrinter = "";
 let server: Server | null = null;
 
+// Solo Tickomium puede usar la impresora. Sin esto, cualquier página que abra
+// el cajero podría mandar impresiones o leer la lista de impresoras.
+// - https://www.tickomium.com (producción; tickomium.com redirige ahí) y
+//   https://tickomium.com por si algún día se invierte la redirección
+// - localhost / 127.0.0.1 en cualquier puerto, para desarrollo
+// Las peticiones sin Origin (la propia app, curl) no vienen de un navegador.
+const PRODUCTION_HOSTS = new Set(["www.tickomium.com", "tickomium.com"]);
+
+export function isAllowedOrigin(origin: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(origin);
+    if (hostname === "localhost" || hostname === "127.0.0.1") return true;
+    return protocol === "https:" && PRODUCTION_HOSTS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
 const app = express();
+
+// Se rechaza en el servidor (no solo vía CORS): CORS solo impide LEER la
+// respuesta; una petición simple igual llegaría a imprimir.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && !isAllowedOrigin(origin)) {
+    res.status(403).json({ success: false, message: "Origen no permitido" });
+    return;
+  }
+  next();
+});
 
 app.use(
   cors({
-    origin: (_origin, cb) => cb(null, true),
+    origin: (origin, cb) => cb(null, !origin || isAllowedOrigin(origin)),
     methods: ["GET", "POST"],
   })
 );
@@ -123,20 +156,21 @@ export function setPrinter(name: string) {
   currentPrinter = name;
 }
 
-export function setPort(port: number) {
+// `port` solo se cambia al correr el servidor suelto en desarrollo; la app
+// instalada siempre usa PRINT_AGENT_PORT. Si el puerto está ocupado rechaza
+// con el error de Node (code EADDRINUSE) para que la app lo explique.
+export function startServer(printer?: string, port: number = PRINT_AGENT_PORT): Promise<Server> {
   currentPort = port;
-}
-
-export function startServer(port?: number, printer?: string): Promise<Server> {
-  if (port) currentPort = port;
   if (printer) currentPrinter = printer;
 
-  return new Promise((resolve) => {
-    server = app.listen(currentPort, "127.0.0.1", () => {
+  return new Promise((resolve, reject) => {
+    const s = app.listen(currentPort, "127.0.0.1", () => {
+      server = s;
       console.log(`Print Agent corriendo en http://127.0.0.1:${currentPort}`);
       console.log(`Impresora: ${currentPrinter || "(no configurada)"}`);
-      resolve(server!);
+      resolve(s);
     });
+    s.once("error", reject);
   });
 }
 
@@ -152,7 +186,10 @@ export function stopServer(): Promise<void> {
 
 // Si se ejecuta directamente (sin Electron), arranca el servidor
 if (require.main === module) {
-  const port = parseInt(process.env.PRINT_AGENT_PORT || "6441", 10);
+  const port = parseInt(process.env.PRINT_AGENT_PORT || String(PRINT_AGENT_PORT), 10);
   const printer = process.env.PRINTER_NAME || "";
-  startServer(port, printer);
+  startServer(printer, port).catch((err) => {
+    console.error("No se pudo iniciar el servidor:", err.message);
+    process.exit(1);
+  });
 }

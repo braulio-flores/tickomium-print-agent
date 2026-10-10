@@ -63,6 +63,10 @@ En desarrollo (`app.isPackaged === false`) no se registra el arranque automátic
 
 La app no está firmada con una cuenta de desarrollador de Apple. Al empaquetar, `scripts/adhoc-sign.js` (hook `afterPack`) le pone una **firma local válida** (`codesign --sign -`). Eso importa: sin firma, la que trae Electron queda rota y macOS dice que la app "está dañada", un aviso sin salida. Con firma local válida, macOS solo dice que no pudo verificarla y se permite una vez por Mac desde **Configuración del Sistema → Privacidad y seguridad → «Abrir igualmente»** (pide contraseña de administrador). Tickomium muestra esos pasos al instalar.
 
+macOS guarda ese permiso en la marca de cuarentena del propio `.app`. Si no puede escribirla (la app se abrió desde la ventana del `.dmg`, que es de solo lectura, o desde una copia temporal), vuelve a pedir permiso en cada apertura. Por eso, desde la v1.2.1 (`src/mac-install.ts`), al arrancar:
+- si la app no está en Aplicaciones, ofrece moverla (`app.moveToApplicationsFolder`) y se reabre sola desde ahí;
+- ya en Aplicaciones (y corriendo, o sea permitida por el usuario), se quita su propia marca de cuarentena para que macOS no vuelva a preguntar, ni al reabrirla ni al encender la computadora.
+
 No se usa un script de "instalación" dentro del `.dmg`: al venir de internet, macOS lo bloquea igual que a la app. Las actualizaciones desde la propia app no traen la marca de internet, así que ya no piden permiso.
 
 Comprobar una compilación: `codesign --verify --deep --strict "release/mac-arm64/Tickomium Print Agent.app"`.

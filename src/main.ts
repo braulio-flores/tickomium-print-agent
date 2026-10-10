@@ -8,6 +8,7 @@ import {
   latestKnownVersion,
   onUpdateState,
 } from "./updater";
+import { offerMoveToApplications, rememberMacApproval } from "./mac-install";
 
 // Se revisa al arrancar (con margen para no competir con el inicio de la
 // computadora) y luego cada 6 horas. Nunca se instala solo.
@@ -288,6 +289,11 @@ app.on("second-instance", () => {
 // App lifecycle
 app.on("ready", async () => {
   if (!isPrimaryInstance) return;
+  // Mac: si se abrió fuera de Aplicaciones se ofrece moverla (se reabre sola
+  // desde ahí); ya en Aplicaciones, se guarda el permiso para no volver a
+  // pedirlo.
+  if (await offerMoveToApplications()) return;
+  rememberMacApproval();
   await initStore();
   setupIPC();
   applyOpenAtLogin(store.get("openAtLogin") !== false);

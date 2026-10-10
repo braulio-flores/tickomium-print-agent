@@ -232,6 +232,10 @@
           statusBar.className = "status-bar error";
           statusDot.className = "dot red";
           statusText.textContent = `${health.printer} — Deshabilitada`;
+        } else if (health.printerStatus === "disconnected") {
+          statusBar.className = "status-bar error";
+          statusDot.className = "dot red";
+          statusText.textContent = `${health.printer} — Desconectada (revisa el cable)`;
         } else {
           statusBar.className = "status-bar error";
           statusDot.className = "dot red";

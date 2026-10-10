@@ -85,6 +85,28 @@ async function listPrinters(): Promise<string[]> {
   }
 }
 
+// En Mac la impresora sigue "habilitada" aunque el cable esté desconectado
+// (el sistema solo guarda el ticket y lo imprime al reconectarla). Para las
+// impresoras USB se revisa el puerto directamente: si no hay ninguna impresora
+// conectada por USB, no está. Ante cualquier duda (impresora de red, error al
+// consultar) se asume conectada: es peor bloquear una impresora que sí sirve.
+async function isMacUsbPrinterUnplugged(name: string): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+  try {
+    const { stdout: device } = await execFileAsync("lpstat", ["-v", name]);
+    if (!/:\s*usb:\/\//i.test(device)) return false;
+    // Clase 7 = impresora (la misma que usa el sistema para reconocerlas).
+    const { stdout } = await execFileAsync(
+      "ioreg",
+      ["-r", "-c", "IOUSBHostInterface", "-l", "-w0"],
+      { maxBuffer: 10 * 1024 * 1024 }
+    );
+    return !/"bInterfaceClass"\s*=\s*7\b/.test(stdout);
+  } catch {
+    return false;
+  }
+}
+
 // Cross-platform: estado de impresora
 async function getPrinterStatus(name: string): Promise<string> {
   if (!name) return "not_configured";
@@ -97,7 +119,8 @@ async function getPrinterStatus(name: string): Promise<string> {
       return stdout.trim().toLowerCase() === "normal" ? "enabled" : "disabled";
     } else {
       const { stdout } = await execFileAsync("lpstat", ["-p", name]);
-      return stdout.toLowerCase().includes("disabled") ? "disabled" : "enabled";
+      if (stdout.toLowerCase().includes("disabled")) return "disabled";
+      return (await isMacUsbPrinterUnplugged(name)) ? "disconnected" : "enabled";
     }
   } catch {
     return "not_found";
@@ -153,6 +176,13 @@ app.post(
     const buffer = req.body as Buffer;
     if (!buffer || !buffer.length) {
       res.status(400).json({ success: false, message: "Buffer vacío" });
+      return;
+    }
+
+    // Sin esto el ticket se queda en la cola del sistema y sale solo, horas
+    // después, cuando alguien reconecta la impresora.
+    if (await isMacUsbPrinterUnplugged(currentPrinter)) {
+      res.status(503).json({ success: false, message: "La impresora no está conectada" });
       return;
     }
 
